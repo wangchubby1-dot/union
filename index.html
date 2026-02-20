@@ -296,7 +296,7 @@
       <div class="footer">
         System secure. Access pending. Awaiting commands.
         <div class="hint">
-          Hotkeys: [S] = Seen, [N] = New, [Enter] = Start / Restart
+          Hotkeys: [S] = Seen · [N] = New · [Enter] = Start / Restart
         </div>
       </div>
     </div>
@@ -322,8 +322,9 @@
 
     // ====== STATE ======
     let seenWords = new Set();
+    let wordUsage = new Map(); // tracks how many times each word has appeared
     let currentWord = "";
-    let lastWord = "";          // NEW: track last word shown
+    let lastWord = "";
     let isCurrentSeen = false;
     let streak = 0;
     let fails = 0;
@@ -345,6 +346,32 @@
     // ====== HELPERS ======
     function randItem(arr) {
       return arr[Math.floor(Math.random() * arr.length)];
+    }
+
+    function usageOf(word) {
+      return wordUsage.get(word) || 0;
+    }
+
+    // Pick a word that:
+    //  - avoids repeating lastWord when possible
+    //  - prefers words with the lowest usage so far (more variety)
+    function pickBalanced(arr, avoidWord) {
+      if (arr.length === 0) return null;
+
+      let candidates = arr;
+      if (avoidWord && arr.length > 1) {
+        const filtered = arr.filter(w => w !== avoidWord);
+        if (filtered.length > 0) candidates = filtered;
+      }
+
+      let minUsage = Infinity;
+      for (const w of candidates) {
+        const u = usageOf(w);
+        if (u < minUsage) minUsage = u;
+      }
+
+      const leastUsed = candidates.filter(w => usageOf(w) === minUsage);
+      return randItem(leastUsed);
     }
 
     function setButtonsEnabled(enabled) {
@@ -389,53 +416,41 @@
       if (type === "bad") statusEl.classList.add("bad");
     }
 
-    function pickNonRepeating(arr) {
-      // Try up to 10 times to avoid lastWord; if impossible, just return.
-      if (arr.length === 0) return null;
-      if (arr.length === 1) return arr[0];
-
-      let word = randItem(arr);
-      let attempts = 0;
-      while (word === lastWord && attempts < 10) {
-        word = randItem(arr);
-        attempts++;
-      }
-      return word;
-    }
-
     function generateRound() {
-      // Decide if this round should show a previously seen word or a new one
+      const unseen = WORDS.filter(w => !seenWords.has(w));
+
+      // Decide mode (seen/new) – bias to NEW while there are many unseen
       let mode;
       if (seenWords.size === 0) {
         mode = "new";
+      } else if (unseen.length === 0) {
+        mode = "seen";
       } else {
-        mode = Math.random() < 0.5 ? "seen" : "new";
+        const pNew = 0.65; // 65% chance to show a NEW word while we still have some
+        mode = Math.random() < pNew ? "new" : "seen";
       }
 
       let candidate = null;
 
       if (mode === "seen") {
         const arr = Array.from(seenWords);
-        candidate = pickNonRepeating(arr);
+        candidate = pickBalanced(arr, lastWord);
         isCurrentSeen = true;
       } else {
-        const unseen = WORDS.filter(w => !seenWords.has(w));
-        if (unseen.length === 0) {
-          const arr = Array.from(seenWords);
-          candidate = pickNonRepeating(arr);
-          isCurrentSeen = true;
-        } else {
-          candidate = pickNonRepeating(unseen);
-          isCurrentSeen = false;
-        }
+        candidate = pickBalanced(unseen, lastWord);
+        isCurrentSeen = false;
       }
 
       if (!candidate) {
-        candidate = randItem(WORDS); // safety fallback
+        candidate = pickBalanced(WORDS, lastWord) || randItem(WORDS);
+        isCurrentSeen = seenWords.has(candidate);
       }
 
       currentWord = candidate;
       lastWord = candidate;
+
+      // bump usage count for variety tracking
+      wordUsage.set(currentWord, usageOf(currentWord) + 1);
 
       wordEl.textContent = currentWord;
       roundActive = true;
@@ -446,6 +461,7 @@
 
     function startGame() {
       seenWords = new Set();
+      wordUsage = new Map();
       currentWord = "";
       lastWord = "";
       streak = 0;
@@ -497,8 +513,7 @@
 
       if (correct) {
         streak++;
-        // Once a word has appeared, mark it as seen for future rounds
-        seenWords.add(currentWord);
+        seenWords.add(currentWord); // token has now been seen in this run
         updateStats();
 
         if (streak >= TARGET_STREAK) {
@@ -514,12 +529,11 @@
       }
     }
 
-    // ====== EVENT HOOKS ======
+    // ====== EVENTS ======
     btnStart.addEventListener("click", startGame);
     btnSeen.addEventListener("click", () => handleChoice("seen"));
     btnNew.addEventListener("click", () => handleChoice("new"));
 
-    // Keyboard controls
     document.addEventListener("keydown", (e) => {
       if (e.code === "Enter") {
         startGame();
